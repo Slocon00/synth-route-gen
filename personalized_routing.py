@@ -294,21 +294,21 @@ def compare_fastest(G: nx.MultiDiGraph,
                                  total=len(user_routes),
                                  disable=not verbose)):
         uid = user_result[0]
-        real_stats = user_result[1]
-        fastest_means = user_result[2]
+        real_stats_user = user_result[1]
+        fastest_means_user = user_result[2]
         alphas_user = user_result[3]
+
+        alphas[user_result[0]] = {attr: alphas_user[attr] for attr in attributes}
 
         real_stats['uid'].append(uid)
         fastest_means['uid'].append(uid)
         for attr in attributes:
-            real_stats[f'{attr}_mean'].append(real_stats[f'{attr}_mean'])
-            real_stats[f'{attr}_median'].append(real_stats[f'{attr}_median'])
-            real_stats[f'{attr}_percentile_25'].append(real_stats[f'{attr}_percentile_25'])
-            real_stats[f'{attr}_percentile_75'].append(real_stats[f'{attr}_percentile_75'])
+            real_stats[f'{attr}_mean'].append(real_stats_user[f'{attr}_mean'])
+            real_stats[f'{attr}_median'].append(real_stats_user[f'{attr}_median'])
+            real_stats[f'{attr}_percentile_25'].append(real_stats_user[f'{attr}_percentile_25'])
+            real_stats[f'{attr}_percentile_75'].append(real_stats_user[f'{attr}_percentile_75'])
 
-            fastest_means[attr].append(fastest_means[attr])
-
-            alphas[user_result[0]][attr] = alphas_user[attr]
+            fastest_means[attr].append(fastest_means_user[attr])
 
     pd.DataFrame(real_stats).to_csv(real_path,index=False)
     pd.DataFrame(fastest_means).to_csv(fastest_path, index=False)
@@ -649,8 +649,7 @@ def learn_user_preferences(G: nx.MultiDiGraph,
                     best_overlap = beta_overlaps[b]
 
             if best_gaps is None:
-                # No improvement found, change beta towards "better" direction
-                # with lower MAE for the current attribute
+                # No improvement found
                 _log(f"No improvement found for attribute  {cost_attributes[c_idx]}", verbose)
             else:
                 _log(f"Found improvement for attribute {cost_attributes[c_idx]}: {betas[cost_attributes[c_idx]]}, MAE: {best_maes[cost_attributes[c_idx]]}", verbose)

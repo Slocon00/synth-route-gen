@@ -184,7 +184,8 @@ def dtw_overlap_routes(G: nx.MultiDiGraph, route1: list, route2: list) -> tuple:
     dtw_distance = float(sim/len(path))
 
     common_nodes = set(route1).intersection(set(route2))
-    overlap = len(common_nodes) / max(len(route1), len(route2))
+    union_nodes = set(route1).union(set(route2))
+    overlap = len(common_nodes) / len(union_nodes)
 
     return dtw_distance, overlap
 
