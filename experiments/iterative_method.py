@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import json
 import numpy as np
@@ -11,12 +12,15 @@ from tqdm import tqdm
 import multiprocessing.pool as mpp
 from sklearn.preprocessing import MaxAbsScaler
 
+sys.path.append('..')
+sys.path.append('../libs')
 from personalized_routing import (_worker_compute_user_gaps,
-                                  _worker_collect_user_attributes,
                                   _init_global_variables,
                                   _istarmap,
                                   _log,
                                   attributes)
+
+from trajectory_analysis import _worker_collect_user_attributes
 
 
 def learn_user_pref_allones(G: nx.MultiDiGraph,
@@ -180,7 +184,6 @@ def test_betas(G: nx.MultiDiGraph,
     Test a set of beta values for the cost function and compute the relative
     gaps between the real route attributes and synthetic route attributes. The
     relative gaps are written to file.
-    Used to test transferabilty.
     """
 
     # Conversion to matrix format 

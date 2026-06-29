@@ -50,15 +50,15 @@ attributes = [
 # -------------- Utils -------------- #
 
 
-def _init_global_variables(G,
-                          n_nodes,
-                          node_to_idx,
-                          idx_to_node, 
-                          u_indices,
-                          v_indices,
-                          attribute_values,
-                          cost_attributes,
-                          base_cost):
+def _init_global_variables(G = None,
+                           n_nodes = None,
+                           node_to_idx = None,
+                           idx_to_node = None,
+                           u_indices = None,
+                           v_indices = None,
+                           attribute_values = None,
+                           cost_attributes = None,
+                           base_cost = None):
     """Initialize global variables for multiprocessing workers."""
     global G_WORKER, N_NODES, NODE_TO_IDX, IDX_TO_NODE, U_INDICES, V_INDICES
     global ATTRIBUTE_VALUES, COST_ATTRIBUTES, BASE_COST
