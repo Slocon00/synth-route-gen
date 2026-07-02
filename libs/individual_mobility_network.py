@@ -229,6 +229,7 @@ def movements_detection(pid_lid, traj_from_to, imh):
         'movement_prototype': movement_prototype,
         'loc_nextlocs': loc_nextlocs,
         'traj_from_to_loc': traj_from_to_loc,
+        'loc_from_to_traj': loc_from_to_traj,
         'lft_mid': lft_mid,
         'graph': G,
     }
@@ -868,6 +869,7 @@ def build_imn(imh, reg_loc=True, events=None, verbose=False, pilot="SIS"):
             'point_location': loc_res['pid_lid'],
             'traj_points_from_to': traj_from_to,
             'traj_location_from_to': mov_res['traj_from_to_loc'],
+            'location_traj_from_to': mov_res['loc_from_to_traj'],
             'tid_se_times': tid_se_times,
 
             'location_points': default_to_regular(loc_res['location_points']),
@@ -903,6 +905,8 @@ def build_imn(imh, reg_loc=True, events=None, verbose=False, pilot="SIS"):
             'loc_sup_cut': loc_min_sup,
 
             'graph': mov_res['graph'],
+
+            'trajectories': imh['trajectories'],
         }
     if pilot == "VFI":
         stays_VFI = get_locations_durations_VFI(imh['trajectories'], mov_res['traj_from_to_loc'], mov_res['lft_mid'])
