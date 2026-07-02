@@ -340,7 +340,7 @@ def dtw_overlap_all(G: nx.MultiDiGraph, routes: dict, filename: str, num_process
 
 def get_route_edge_attributes(G: nx.MultiDiGraph,
                               routes: dict,
-                              center: tuple,
+                              center: dict,
                               filename_real: str,
                               filename_fastest: str,
                               verbose: bool = False):
@@ -359,9 +359,10 @@ def get_route_edge_attributes(G: nx.MultiDiGraph,
     routes : dict
         A dictionary mapping each user ID to a dictionary of map-matched and
         recontructed trajectories, containing a list of graph nodes (`nodes`).
-    center : tuple
+    center : dict
         The center of the city/region covered by the data. It is not necessarily
-        the geometric center of the graph.
+        the geometric center of the graph. Must contain the keys 'x' and 'y'
+        for longitude and latitude, respectively.
     filename_real : str
         The path to the output CSV file where the real routes' edge attributes
         will be saved.
@@ -371,6 +372,7 @@ def get_route_edge_attributes(G: nx.MultiDiGraph,
     verbose: bool, optional
         Controls whether to display a progress bar during processing.
     """
+    # TODO parallelize
     weekday_names = {
         0: 'Monday',
         1: 'Tuesday',
