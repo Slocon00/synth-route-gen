@@ -379,7 +379,7 @@ def _worker_compute_user_gaps(uid: int,
 
         user_costs += b * w * ATTRIBUTE_VALUES[attributes.index(attr)]
     user_costs = BASE_COST * (1 + user_costs)
-    user_costs[user_costs <= 0] = 0.0
+    user_costs[user_costs <= 0] = 0.01 * BASE_COST
 
     adj_matrix = coo_matrix((user_costs, (U_INDICES, V_INDICES)), shape=(N_NODES, N_NODES))
 
@@ -454,14 +454,154 @@ def _worker_compute_user_gaps(uid: int,
     return gap, overlaps
 
 
+def _random_search(pool: mpp.Pool, 
+                   cost_attributes: list,
+                   real_means: pd.DataFrame,
+                   routes: dict,
+                   alphas: dict,
+                   verbose: bool = False):
+    # Random search for starting betas of learn_user_preferences
+    betas_rs = [0.1, 0.5, 0.25, 1.0, 2.5, 5.0, 10.0]
+    combinations = set()
+    while len(combinations) < 16:
+        combination = tuple(np.random.choice(betas_rs, size=len(cost_attributes)))
+        combinations.add(combination)
+
+    best_mae = np.array([np.inf] * len(attributes))
+    best_combo = None
+    for combination in tqdm(combinations, desc='Random search combinations', disable=not verbose):
+        _log(f"Testing combination: {[float(b) for b in combination]}", verbose)
+
+        user_results = list(
+            tqdm(pool.istarmap(_worker_compute_user_gaps,
+                            [(uid,
+                              user_routes,
+                              real_means[real_means['uid'] == uid][attributes].values[0],
+                              None,
+                              None,
+                              4,
+                              alphas[str(uid)],
+                              {cost: combination[i] for i, cost in enumerate(cost_attributes)})
+                              for uid, user_routes in routes.items()]),
+                desc='Users',
+                total=len(routes),
+                disable=not verbose)
+        )
+
+        gaps = []
+        for gap, _ in user_results:
+            gaps.append(gap)
+        gaps = np.array(gaps)
+
+        mae_by_attr = np.nanmean(np.abs(gaps), axis=0)
+        if (mae_by_attr < best_mae).all():
+            best_mae = mae_by_attr
+            best_combo = combination
+
+    _log(f"Best combination from random search: {best_combo}, MAE: {best_mae}", verbose)
+
+    betas = {
+        cost: best_combo[i] for i, cost in enumerate(cost_attributes)
+    }
+
+    return betas
+
+
+def _search_betas(pool: mpp.Pool,
+                  routes: list,
+                  cost_attributes: list,
+                  alphas: dict,
+                  betas: dict,
+                  real_means: pd.DataFrame,
+                  results_dir: str,
+                  iterations: int,
+                  verbose: bool = False):
+    # Search for the best betas for the given routes, starting from the provided betas
+
+    # List of MAE values across all sub-iterations
+    mae = []
+    best_maes = {attr: np.inf for attr in cost_attributes}
+
+    for i in range(iterations * len(cost_attributes)):
+        c_idx = i % len(cost_attributes) # index in cost_attributes
+        a_idx = attributes.index(cost_attributes[c_idx]) # index in attributes
+        
+        _log(f"It {i // len(cost_attributes)}, adjusting attribute {cost_attributes[c_idx]}", verbose)
+
+        c_beta = betas[cost_attributes[c_idx]]
+        beta_gaps = {} # Collects gaps for all users for each candidate beta
+        beta_overlaps = {} # Collects overlaps for all users for each candidate beta
+
+        for candidate_beta in [c_beta/10, c_beta/2, c_beta, c_beta*10/2, c_beta*10]:
+            _log(f"Testing beta {candidate_beta}", verbose)
+
+            user_results = list(
+                tqdm(pool.istarmap(_worker_compute_user_gaps,
+                                [(uid,
+                                    user_routes,
+                                    real_means[real_means['uid'] == uid][attributes].values[0],
+                                    candidate_beta,
+                                    c_idx,
+                                    i,
+                                    alphas[str(uid)],
+                                    betas) 
+                                    for uid, user_routes in routes.items()]),
+                    desc='Users',
+                    total=len(routes),
+                    disable=not verbose)
+            )
+            beta_gaps[candidate_beta] = []
+            beta_overlaps[candidate_beta] = []
+            for gap, overlaps in user_results:
+                beta_gaps[candidate_beta].append(gap)
+                beta_overlaps[candidate_beta].extend(overlaps)
+
+        # Checking if any beta improves the MAE for the current cost attribute
+        best_gaps = None
+        best_overlap = None
+        for b, g in beta_gaps.items():
+            g = np.array(g)
+            b_mae = np.nanmean(np.abs(g[:,a_idx]))
+
+            if b_mae < best_maes[cost_attributes[c_idx]]:
+                # Improvement
+                best_maes[cost_attributes[c_idx]] = b_mae
+                betas[cost_attributes[c_idx]] = b
+                best_gaps = g
+                best_overlap = beta_overlaps[b]
+
+        if best_gaps is None:
+            # No improvement found
+            _log(f"No improvement found for attribute  {cost_attributes[c_idx]}", verbose)
+        else:
+            _log(f"Found improvement for attribute {cost_attributes[c_idx]}: {betas[cost_attributes[c_idx]]}, MAE: {best_maes[cost_attributes[c_idx]]}", verbose)
+
+            # Saving intermediate relative gaps
+            pd.DataFrame(best_gaps, columns=attributes).to_csv(os.path.join(results_dir, f'gaps_iter_{i}.csv'), index=False)
+        
+            # Saving intermediate overlaps
+            pd.DataFrame(best_overlap, columns=['uid', 'tid', 'overlap']).to_csv(os.path.join(results_dir, f'overlaps_iter_{i}.csv'), index=False)
+            _log('Mean Overlap: {:.4f}'.format(np.mean(best_overlap, axis=0)[2]), verbose)
+            
+            # Saving current beta values
+            json.dump(betas, open(os.path.join(results_dir, f'betas_iter_{i}.json'), 'w'))
+
+        mae.append(best_maes[cost_attributes[c_idx]])
+
+    _log(f"Learned betas: {betas}", verbose)
+
+    json.dump(betas, open(os.path.join(results_dir, f'learned_betas.json'), 'w'))
+    np.save(os.path.join(results_dir, f'mae.npy'), np.array(mae))    
+
+
 def learn_user_preferences(G: nx.MultiDiGraph,
                            routes: list,
                            cost_attributes: list,
                            alphas_path: str,
                            real_path: str,
                            results_dir: str,
-                           cluster_to_uid: dict,
                            iterations: int,
+                           cluster_to_uid: dict = None,
                            num_processes: int = None,
                            verbose: bool = False):
     """
@@ -489,7 +629,12 @@ def learn_user_preferences(G: nx.MultiDiGraph,
         The number of iterations to perform for each cost attribute. Each
         iteration tests a set of candidate beta values for each of the
         attributes in `cost_attributes`, and updates the beta values according
-        to the results.  
+        to the results.
+    cluster_to_uid : dict, optional
+        A dictionary that maps each cluster index to the list of user IDs that
+        belong to that cluster. If None, all users are treated as a single 
+        cluster. If provided, a unique set of beta values will be computed for
+        each cluster.
     num_processes : int, optional
         Number of processes to use for parallel computation. If None, the
         number of CPU cores will be used. Defaults to None.
@@ -516,7 +661,7 @@ def learn_user_preferences(G: nx.MultiDiGraph,
 
     attribute_values = []
     for attr in attributes:
-        attribute_values.append(np.array([d[attr] for _, _, d in edges]))
+        attribute_values.append(np.array([float(d[attr]) for _, _, d in edges]))
     attribute_values = np.array(attribute_values)
 
     base_cost = np.nanmedian(attribute_values[attributes.index('travel_time')])
@@ -543,133 +688,29 @@ def learn_user_preferences(G: nx.MultiDiGraph,
                               base_cost)
     )
 
-    for cluster, cluster_uids in cluster_to_uid.items():
-        _log(f"Searching betas for cluster {cluster}", verbose)
-        os.makedirs(os.path.join(results_dir, f"cluster_{cluster}"))
-        cluster_routes = {uid: routes[uid] for uid in cluster_uids}
+    if cluster_to_uid is None:
+        _log("Searching initial betas", verbose)
+        betas = _random_search(pool, cost_attributes, real_means, routes, alphas, verbose)
+        results_subdir = results_dir
+    else:
+        for cluster, cluster_uids in cluster_to_uid.items():
+            _log(f"Searching initial betas for cluster {cluster}", verbose)
+            os.makedirs(os.path.join(results_dir, f"cluster_{cluster}"))
 
-        # Random search for starting betas
-        betas_rs = [0.1, 0.5, 0.25, 1.0, 2.5, 5.0, 10.0]
-        combinations = set()
-        while len(combinations) < 16:
-            combination = tuple(np.random.choice(betas_rs, size=len(cost_attributes)))
-            combinations.add(combination)
+            cluster_routes = {uid: routes[uid] for uid in cluster_uids}
+            betas = _random_search(pool, cost_attributes, real_means, cluster_routes, alphas, verbose)
 
-        best_mae = np.array([np.inf] * len(attributes))
-        best_combo = None
-        for combination in tqdm(combinations, desc='Random search combinations', disable=not verbose):
-            _log(f"Testing combination: {[float(b) for b in combination]}", verbose)
+            results_subdir = os.path.join(results_dir, f"cluster_{cluster}")
 
-            user_results = list(
-                tqdm(pool.istarmap(_worker_compute_user_gaps,
-                                [(uid,
-                                  user_routes,
-                                  real_means[real_means['uid'] == uid][attributes].values[0],
-                                  None,
-                                  None,
-                                  4,
-                                  alphas[str(uid)],
-                                  {cost: combination[i] for i, cost in enumerate(cost_attributes)})
-                                  for uid, user_routes in cluster_routes.items()]),
-                    desc='Users',
-                    total=len(cluster_routes),
-                    disable=not verbose)
-            )
-
-            gaps = []
-            for gap, _ in user_results:
-                gaps.append(gap)
-            gaps = np.array(gaps)
-
-            mae_by_attr = np.nanmean(np.abs(gaps), axis=0)
-            if (mae_by_attr < best_mae).all():
-                best_mae = mae_by_attr
-                best_combo = combination
-
-        _log(f"Best combination from random search: {best_combo}, MAE: {best_mae}", verbose)
-
-        betas = {
-            cost: best_combo[i] for i, cost in enumerate(cost_attributes)
-        }
-
-        # List of MAE values across all sub-iterations
-        mae = []
-        best_maes = {attr: np.inf for attr in cost_attributes}
-
-        for i in range(iterations * len(cost_attributes)):
-            c_idx = i % len(cost_attributes) # index in cost_attributes
-            a_idx = attributes.index(cost_attributes[c_idx]) # index in attributes
-            
-            _log(f"It {i // len(cost_attributes)}, adjusting attribute {cost_attributes[c_idx]}", verbose)
-
-            c_beta = betas[cost_attributes[c_idx]]
-            beta_gaps = {} # Collects gaps for all users for each candidate beta
-            beta_overlaps = {} # Collects overlaps for all users for each candidate beta
-
-            for candidate_beta in [c_beta/10,
-                                c_beta/2,
-                                c_beta,
-                                c_beta*10/2,
-                                c_beta*10]:
-                _log(f"Testing beta {candidate_beta}", verbose)
-
-                user_results = list(
-                    tqdm(pool.istarmap(_worker_compute_user_gaps,
-                                    [(uid,
-                                        user_routes,
-                                        real_means[real_means['uid'] == uid][attributes].values[0],
-                                        candidate_beta,
-                                        c_idx,
-                                        i,
-                                        alphas[str(uid)],
-                                        betas) 
-                                        for uid, user_routes in cluster_routes.items()]),
-                        desc='Users',
-                        total=len(cluster_routes),
-                        disable=not verbose)
-                )
-                beta_gaps[candidate_beta] = []
-                beta_overlaps[candidate_beta] = []
-                for gap, overlaps in user_results:
-                    beta_gaps[candidate_beta].append(gap)
-                    beta_overlaps[candidate_beta].extend(overlaps)
-
-            # Checking if any beta improves the MAE for the current cost attribute
-            best_gaps = None
-            best_overlap = None
-            for b, g in beta_gaps.items():
-                g = np.array(g)
-                b_mae = np.nanmean(np.abs(g[:,a_idx]))
-
-                if b_mae < best_maes[cost_attributes[c_idx]]:
-                    # Improvement
-                    best_maes[cost_attributes[c_idx]] = b_mae
-                    betas[cost_attributes[c_idx]] = b
-                    best_gaps = g
-                    best_overlap = beta_overlaps[b]
-
-            if best_gaps is None:
-                # No improvement found
-                _log(f"No improvement found for attribute  {cost_attributes[c_idx]}", verbose)
-            else:
-                _log(f"Found improvement for attribute {cost_attributes[c_idx]}: {betas[cost_attributes[c_idx]]}, MAE: {best_maes[cost_attributes[c_idx]]}", verbose)
-
-                # Saving intermediate relative gaps
-                pd.DataFrame(best_gaps, columns=attributes).to_csv(os.path.join(results_dir, f'cluster_{cluster}/gaps_iter_{i}.csv'), index=False)
-            
-                # Saving intermediate overlaps
-                pd.DataFrame(best_overlap, columns=['uid', 'tid', 'overlap']).to_csv(os.path.join(results_dir, f'cluster_{cluster}/overlaps_iter_{i}.csv'), index=False)
-                _log('Mean Overlap: {:.4f}'.format(np.mean(best_overlap, axis=0)[2]), verbose)
-                
-                # Saving current beta values
-                json.dump(betas, open(os.path.join(results_dir, f'cluster_{cluster}/betas_iter_{i}.json'), 'w'))
-
-            mae.append(best_maes[cost_attributes[c_idx]])
-
-        _log(f"Learned betas: {betas}", verbose)
-
-        json.dump(betas, open(os.path.join(results_dir, f'cluster_{cluster}/learned_betas.json'), 'w'))
-        np.save(os.path.join(results_dir, f'cluster_{cluster}/mae.npy'), np.array(mae))
+            _search_betas(pool,
+                          cluster_routes,
+                          cost_attributes,
+                          alphas,
+                          betas,
+                          real_means,
+                          results_subdir,
+                          iterations,
+                          verbose)
 
     pool.close()
     pool.join()

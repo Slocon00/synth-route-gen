@@ -286,11 +286,8 @@ def dtw_overlap_all(G: nx.MultiDiGraph, routes: dict, filename: str, num_process
     v_indices = np.array([node_to_idx[v] for _, v, _ in edges])
 
     attribute_values = []
-    for attr in ['travel_time', 'length', 'speed_kph', 'residential', 'motorway']:
-        if attr in ['residential', 'motorway']:
-            attribute_values.append(np.array([1-d[attr] for _, _, d in edges]))
-        else:
-            attribute_values.append(np.array([d[attr] for _, _, d in edges]))
+    for attr in ['travel_time', 'length', 'speed_kph', 'residential', 'motorway']:            
+        attribute_values.append(np.array([float(d[attr]) for _, _, d in edges]))
     attribute_values.append(np.random.choice(100, len(edges)))  # for random cost
     attribute_values = np.array(attribute_values)
 
@@ -309,11 +306,9 @@ def dtw_overlap_all(G: nx.MultiDiGraph, routes: dict, filename: str, num_process
     )
     
     costs = ['travel_time', 'length', 'speed_kph', 'residential', 'motorway', 'random']
-    with open(filename, 'w') as fout:
-        # TODO change to gz
-        writer = csv.writer(fout)
+    with gzip.open(filename, 'wb') as fout:
         header = ['uid', 'tid'] + [f'dtw_{cost}' for cost in costs] + [f'overlap_{cost}' for cost in costs] + ['spherical_dist_o_d']
-        writer.writerow(header)
+        fout.write(','.join(header).encode() + b'\n')
 
         for uid, tid_to_stats in list(tqdm.tqdm(pool.istarmap(_worker_dtw_overlap,
                                                               [(uid, user_routes) for uid, user_routes in routes.items()]),
@@ -329,10 +324,10 @@ def dtw_overlap_all(G: nx.MultiDiGraph, routes: dict, filename: str, num_process
                 for cost in costs:
                     row.append(tid_to_stats[tid]['overlap_' + cost])
                 row.append(tid_to_stats[tid]['spherical_dist_o_d'])
-                writer.writerow(row)
+                fout.write(','.join(map(str, row)).encode() + b'\n')
         
-        pool.close()
-        pool.join()
+    pool.close()
+    pool.join()
 
 
 # -------------- Data collection -------------- #
@@ -393,7 +388,7 @@ def get_route_edge_attributes(G: nx.MultiDiGraph,
 
     attribute_values = []
     for attr in attributes:
-        attribute_values.append(np.array([d[attr] for _, _, d in edges]))
+        attribute_values.append(np.array([float(d[attr]) for _, _, d in edges]))
     attribute_values = np.array(attribute_values)
 
     n_nodes = len(G.nodes)
@@ -572,7 +567,7 @@ def _worker_collect_user_attributes(uid: int,
             beta = BETA
         user_costs += beta * w * ATTRIBUTE_VALUES[attributes.index(attr)]
     user_costs = BASE_COST * (1 + user_costs)
-    user_costs[user_costs <= 0] = 0.0
+    user_costs[user_costs <= 0] = 0.01 * BASE_COST
 
     adj_matrix = coo_matrix((user_costs, (U_INDICES, V_INDICES)), shape=(N_NODES, N_NODES))
 
@@ -660,7 +655,7 @@ def get_local_adjusted_edge_attributes(G: nx.MultiDiGraph,
 
     attribute_values = []
     for attr in attributes:
-        attribute_values.append(np.array([d[attr] for _, _, d in edges]))
+        attribute_values.append(np.array([float(d[attr]) for _, _, d in edges]))
     attribute_values = np.array(attribute_values)
 
     base_cost = np.nanmedian(attribute_values[attributes.index('travel_time')])
@@ -722,7 +717,7 @@ def get_route_bbox(G, routes, buffer=0.01):
     return (min(lons) - buffer, min(lats) - buffer, max(lons) + buffer, max(lats) + buffer)
 
 
-def plot_trajectory_on_map(G, routes, uid, tid, optimize: list[str]):
+def plot_trajectory_on_map(G, routes, uid, tid, optimize: list[str] = None):
     """
     Plot a route of the graph, along with the optimal routes that minimize
     different metrics that connect the original route's origin and destination.
@@ -775,9 +770,10 @@ def plot_trajectory_on_map(G, routes, uid, tid, optimize: list[str]):
                          close=False,
                          show=False)
 
-    plt.legend(handles=[plt.Line2D([0],[0], color=c, lw=2, alpha=0.5) for c in route_colors],
-               labels=legend_names,
-               loc='upper left',
-               fontsize='small')
+    if optimize is not None:
+        plt.legend(handles=[plt.Line2D([0],[0], color=c, lw=2, alpha=0.5) for c in route_colors],
+                labels=legend_names,
+                loc='upper left',
+                fontsize='small')
     
     plt.show()

@@ -166,7 +166,7 @@ def map_match_valhalla_all(dict_trajs: dict,
                            output_path: str,
                            tile_extract: str = "valhalla/valhalla_tiles.tar",
                            tile_dir: str = "valhalla/valhalla_tiles",
-                           verbose: bool = False) -> list:
+                           verbose: bool = False):
     """
     Map-match and reconstruct all the trajectories in the input dictionary
     using Valhalla's `trace_attributes` action.
@@ -186,23 +186,15 @@ def map_match_valhalla_all(dict_trajs: dict,
         The path to the tar file containing the compressed Valhalla tiles.
     verbose : bool, optional
         Controls whether to display a progress bar during processing.
-
-    Returns
-    -------
-    rejected : list
-        A list of tuples (uid, tid), containing all the trajectories rejected
-        by Valhalla during map-matching.
     """
     # TODO parallelize (each worker gets its own Actor instance)
     config = get_config(tile_extract, tile_dir)
     actor = Actor(config)
 
-    _log("Starting Valhalla map-matching", verbose)
     with gzip.open(output_path, 'wt') as fout:
         writer = csv.writer(fout)
         writer.writerow(['uid', 'tid', 'latitude', 'longitude', 'timestamp'])
 
-        rejected = [] # contains trajectories that failed map-matching
         for uid, df_traj in tqdm.tqdm(dict_trajs.items(), desc="Users", file=sys.stdout, disable=not verbose):
             for tid in df_traj['id'].unique():
                 try:
@@ -210,10 +202,7 @@ def map_match_valhalla_all(dict_trajs: dict,
                 except RuntimeError:
                     # To avoid a Valhalla segfault
                     actor = _reload_valhalla(tile_extract, tile_dir)
-                    rejected.append((int(uid), int(tid)))
                     continue
-    _log("Valhalla map-matching completed", verbose)
-    return rejected
 
 
 def points_to_osmnx_routes(G: nx.MultiDiGraph,
@@ -243,7 +232,6 @@ def points_to_osmnx_routes(G: nx.MultiDiGraph,
     routes = {}
     edges = ox.nearest_edges(G, df_matched['longitude'], df_matched['latitude'])
 
-    _log("Starting conversion to osmnx routes", verbose)
     u_idx = 0
     for uid in tqdm.tqdm(df_matched['uid'].unique(), file=sys.stdout, desc="Users", disable=not verbose):
         user_info = {}
@@ -279,7 +267,6 @@ def points_to_osmnx_routes(G: nx.MultiDiGraph,
         routes[int(uid)] = user_info
         u_idx += len(df_trajs)
 
-    _log("Conversion to osmnx routes completed", verbose)
     with gzip.GzipFile(output_path, 'w') as fout:
         fout.write(json.dumps(clear_tuples4json(routes)).encode('utf-8'))
 
