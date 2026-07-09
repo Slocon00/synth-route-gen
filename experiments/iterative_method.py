@@ -20,7 +20,7 @@ from personalized_routing import (_worker_compute_user_gaps,
                                   _log,
                                   attributes)
 
-from trajectory_analysis import _worker_collect_user_attributes
+from experiments.trajectory_analysis import _worker_collect_user_attributes
 
 
 def learn_user_pref_allones(G: nx.MultiDiGraph,
@@ -219,8 +219,7 @@ def test_betas(G: nx.MultiDiGraph,
                               base_cost)
     )
 
-    real_means = pd.read_csv(real_path)[['uid'] + [f'{attr}_mean' for attr in attributes]]
-    real_means.columns = ['uid'] + attributes
+    real_means = pd.read_csv(real_path)[['uid'] + [attributes]]
 
     with open(results_path, 'w') as f:
         f.write(f'uid,{",".join(attributes)}\n')

@@ -7,6 +7,9 @@ import networkx as nx
 import osmnx as ox
 import geopandas as gpd
 
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
 from tqdm import tqdm
 import multiprocessing.pool as mpp
 from sklearn.preprocessing import MaxAbsScaler
@@ -283,13 +286,17 @@ def compare_fastest(G: nx.MultiDiGraph,
 
     alphas = {}
 
+    # Dict will contain uid, mean, median, 1st and 3rd quartiles for each attribute
+    # Mean has column name of attribute to ease comparison with fastest
     real_stats = {'uid': []}
-    real_stats.update({f'{attr}_{stat}': [] for attr in attributes for stat in ['mean', 'median', 'percentile_25', 'percentile_75']})
+    real_stats.update({attr: [] for attr in attributes})
+    real_stats.update({f'{attr}_{stat}': [] for attr in attributes for stat in ['median', 'percentile_25', 'percentile_75']})
 
     fastest_means = {'uid': []}
     fastest_means.update({attr: [] for attr in attributes})
 
-    for user_result in list(tqdm(pool.istarmap(_worker_compare_fastest, [(uid, user_routes) for uid, user_routes in user_routes.items()]),
+    for user_result in list(tqdm(pool.istarmap(_worker_compare_fastest,
+                                               [(uid, user_routes) for uid, user_routes in user_routes.items()]),
                                  desc='Users',
                                  total=len(user_routes),
                                  disable=not verbose)):
@@ -303,7 +310,7 @@ def compare_fastest(G: nx.MultiDiGraph,
         real_stats['uid'].append(uid)
         fastest_means['uid'].append(uid)
         for attr in attributes:
-            real_stats[f'{attr}_mean'].append(real_stats_user[f'{attr}_mean'])
+            real_stats[attr].append(real_stats_user[f'{attr}_mean'])
             real_stats[f'{attr}_median'].append(real_stats_user[f'{attr}_median'])
             real_stats[f'{attr}_percentile_25'].append(real_stats_user[f'{attr}_percentile_25'])
             real_stats[f'{attr}_percentile_75'].append(real_stats_user[f'{attr}_percentile_75'])
@@ -591,7 +598,9 @@ def _search_betas(pool: mpp.Pool,
     _log(f"Learned betas: {betas}", verbose)
 
     json.dump(betas, open(os.path.join(results_dir, f'learned_betas.json'), 'w'))
-    np.save(os.path.join(results_dir, f'mae.npy'), np.array(mae))    
+    np.save(os.path.join(results_dir, f'mae.npy'), np.array(mae))
+
+    return betas  
 
 
 def learn_user_preferences(G: nx.MultiDiGraph,
@@ -640,8 +649,14 @@ def learn_user_preferences(G: nx.MultiDiGraph,
         number of CPU cores will be used. Defaults to None.
     verbose : bool, optional
         Whether to print progress messages/bars. Defaults to False.
+
+    Returns
+    -------
+    betas : dict
+        A dictionary mapping each cost attribute to its learned beta value.
     """
     # TODO replace paths with actual dataframes/dicts
+    # TODO complete docstring
 
     # Creating folder for results
     if os.path.exists(results_dir):
@@ -649,6 +664,7 @@ def learn_user_preferences(G: nx.MultiDiGraph,
         shutil.rmtree(results_dir)
     os.makedirs(results_dir)
     
+    _log("Converting graph representation", verbose)
     # Conversion to indices/matrix format for scipy
     nodes = list(G.nodes())
     n_nodes = len(G.nodes)
@@ -668,11 +684,10 @@ def learn_user_preferences(G: nx.MultiDiGraph,
     scaler = MaxAbsScaler()
     attribute_values = scaler.fit_transform(attribute_values)
 
-    real_means = pd.read_csv(real_path)[['uid'] + [f'{attr}_mean' for attr in attributes]]
-    real_means.columns = ['uid'] + attributes
-
+    real_means = pd.read_csv(real_path)[['uid'] + attributes]
     alphas = json.load(open(alphas_path, 'r'))
 
+    _log("Initializing multiprocessing pool", verbose)
     # Patching multiprocessing to allow starmap + tqdm progress bar
     mpp.Pool.istarmap = _istarmap
     pool = mpp.Pool(processes=num_processes,
@@ -692,7 +707,23 @@ def learn_user_preferences(G: nx.MultiDiGraph,
         _log("Searching initial betas", verbose)
         betas = _random_search(pool, cost_attributes, real_means, routes, alphas, verbose)
         results_subdir = results_dir
+        os.makedirs(results_subdir, exist_ok=True)
+
+        betas = _search_betas(pool,
+                              routes,
+                              cost_attributes,
+                              alphas,
+                              betas,
+                              real_means,
+                              results_subdir,
+                              iterations,
+                              verbose)
+
+        pool.close()
+        pool.join()
+        return betas
     else:
+        cluster_to_beta = {}
         for cluster, cluster_uids in cluster_to_uid.items():
             _log(f"Searching initial betas for cluster {cluster}", verbose)
             os.makedirs(os.path.join(results_dir, f"cluster_{cluster}"))
@@ -702,18 +733,21 @@ def learn_user_preferences(G: nx.MultiDiGraph,
 
             results_subdir = os.path.join(results_dir, f"cluster_{cluster}")
 
-            _search_betas(pool,
-                          cluster_routes,
-                          cost_attributes,
-                          alphas,
-                          betas,
-                          real_means,
-                          results_subdir,
-                          iterations,
-                          verbose)
+            betas = _search_betas(pool,
+                                  cluster_routes,
+                                  cost_attributes,
+                                  alphas,
+                                  betas,
+                                  real_means,
+                                  results_subdir,
+                                  iterations,
+                                  verbose)
+            
+            cluster_to_beta[cluster] = betas
 
-    pool.close()
-    pool.join()
+        pool.close()
+        pool.join()
+        return cluster_to_beta
 
 
 def add_edge_attributes(G: nx.MultiDiGraph, bufsize: float = 50) -> nx.MultiDiGraph:

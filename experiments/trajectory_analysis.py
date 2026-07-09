@@ -2,7 +2,6 @@ import os
 import sys
 import datetime
 import json
-import csv
 import gzip
 import tqdm
 import networkx as nx
@@ -15,12 +14,18 @@ import multiprocessing.pool as mpp
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 
+# If h5py is not installed
+import warnings
+warnings.filterwarnings("ignore",
+                        message=".*h5py not installed, hdf5 features will not be supported.*",
+                        category=UserWarning)
+
 from tslearn.metrics import dtw_path_from_metric
 from sklearn.preprocessing import MaxAbsScaler
 
 sys.path.append('libs')
 from mobility_distance_functions import spherical_distance
-from personalized_routing import _worker_compute_user_gaps
+
 
 # Global variables for multiprocessing
 G_WORKER = None
@@ -304,7 +309,7 @@ def dtw_overlap_all(G: nx.MultiDiGraph, routes: dict, filename: str, num_process
                               v_indices,
                               attribute_values)
     )
-    
+
     costs = ['travel_time', 'length', 'speed_kph', 'residential', 'motorway', 'random']
     with gzip.open(filename, 'wb') as fout:
         header = ['uid', 'tid'] + [f'dtw_{cost}' for cost in costs] + [f'overlap_{cost}' for cost in costs] + ['spherical_dist_o_d']
@@ -609,14 +614,14 @@ def _worker_collect_user_attributes(uid: int,
     return uid, user_values
 
 
-def get_local_adjusted_edge_attributes(G: nx.MultiDiGraph,
-                                             routes: dict,
-                                             beta: float,
-                                             cost_attributes: list[str],
-                                             filename_adjusted: str,
-                                             filename_alphas: str,
-                                             num_processes: int = None,
-                                             verbose=False):
+def get_adjusted_edge_attributes(G: nx.MultiDiGraph,
+                                 routes: dict,
+                                 beta: float,
+                                 cost_attributes: list[str],
+                                 filename_adjusted: str,
+                                 filename_alphas: str,
+                                 num_processes: int = None,
+                                 verbose=False):
     """
     Compute and write to file the edge attributes of the optimal routes for
     each user in `routes`, based on their individual alpha values and a 
@@ -675,7 +680,6 @@ def get_local_adjusted_edge_attributes(G: nx.MultiDiGraph,
                               u_indices,
                               v_indices,
                               attribute_values,
-                              attributes,
                               cost_attributes,
                               base_cost,
                               beta)
