@@ -1,4 +1,4 @@
-# Synthetic route generation
+# Synthetic Individualized Route Generation
 
 The code in this repository is an extension of an existing project developed by the KDD Lab at ISTI-CNR (Pisa). The goal of the project is to generate and clone Individual Mobility Networks from a source area, where trajectory data is available, to a destination area, where such data is potentially missing. This extension focuses on route generation to connect the IMN locations mapped onto the destination area, implementing a more sophisticated approach to learn user preferences and compute user-customized routes (instead of relying on a simple, unrealistic shortest path computation).
 
